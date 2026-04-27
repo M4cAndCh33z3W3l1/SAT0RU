@@ -184,11 +184,11 @@
     // Hand Tracking
     let currentTech = 'neutral';
     let shakeIntensity = 0;
-    let dragMode = false;
-    let dragFingerX = 0;
-    let dragFingerY = 0;
-    let dragOffsetX = 0;
-    let dragOffsetY = 0;
+    let isDragging = false;
+    let dragPositionX = 0;
+    let dragPositionY = 0;
+    let dragVelocityX = 0;
+    let dragVelocityY = 0;
     const videoElement = document.querySelector('.input_video');
     const canvasElement = document.getElementById('output_canvas');
     const canvasCtx = canvasElement.getContext('2d');
@@ -197,132 +197,92 @@
     const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7 });
 
-    // Gesture detection for individual hands
-    function detectHandGesture(lm) {
-        const isUp = (t, p) => lm[t].y < lm[p].y;
-        const pinch = Math.hypot(lm[8].x - lm[4].x, lm[8].y - lm[4].y);
-        
-        // Bowl/Cup shape: All fingers down, palm up
-        const thumbTip = lm[4], thumbBase = lm[3];
-        const indexTip = lm[8], indexBase = lm[6];
-        const middleTip = lm[12], middleBase = lm[10];
-        const ringTip = lm[16], ringBase = lm[14];
-        const pinkyTip = lm[20], pinkyBase = lm[18];
-        
-        const allFingersCurled = !isUp(8,6) && !isUp(12,10) && !isUp(16,14) && !isUp(20,18);
-        const thumbUp = isUp(4, 3);
-        const palmUp = lm[9].y > lm[0].y; // Palm center below wrist
-        
-        // Check for two-finger pointing (index and middle up, ring and pinky down)
-        const twoFingersUp = isUp(8,6) && isUp(12,10) && !isUp(16,14) && !isUp(20,18);
-        if (twoFingersUp) {
-            dragFingerX = (indexTip.x + middleTip.x) / 2;
-            dragFingerY = (indexTip.y + middleTip.y) / 2;
-            dragMode = true;
-            return 'drag';
-        }
-        
-        if (allFingersCurled && thumbUp && palmUp) {
-            return 'blue'; // Bowl shape = Blue
-        }
-        else if (isUp(8,6) && !isUp(12,10)) {
-            return 'red'; // Only index up = Red
-        }
-        else if (isUp(8,6) && isUp(12,10) && isUp(16,14) && isUp(20,18)) {
-            return 'shrine'; // All fingers up
-        }
-        else if (isUp(8,6) && isUp(12,10) && !isUp(16,14)) {
-            return 'void'; // Index and middle up
-        }
-        else if (pinch < 0.04) {
-            return 'pinch'; // Pinch detected
-        }
-        
-        dragMode = false;
-        return 'neutral';
-    }
-
     hands.onResults((results) => {
         canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         let detected = 'neutral';
-        let blueActive = false;
-        let redActive = false;
-        let handsPresent = false;
-        let hasDragGesture = false;
 
-        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-            handsPresent = true;
+        if (results.multiHandLandmarks) {
             // Draw all hands first
             results.multiHandLandmarks.forEach((lm) => {
                 drawConnectors(canvasCtx, lm, HAND_CONNECTIONS, {color: glowColor, lineWidth: 5});
                 drawLandmarks(canvasCtx, lm, {color: '#fff', lineWidth: 1, radius: 2});
             });
 
-            // Detect gestures on each hand independently
-            results.multiHandLandmarks.forEach((lm) => {
-                const gesture = detectHandGesture(lm);
-                if (gesture === 'drag') {
-                    hasDragGesture = true;
-                } else if (gesture === 'blue') {
-                    blueActive = true;
-                } else if (gesture === 'red') {
-                    redActive = true;
-                } else if (gesture !== 'neutral' && gesture !== 'blue' && gesture !== 'red') {
-                    detected = gesture; // Priority: shrine, void, pinch
+            // Check Blue Ball (hands forming circle with space)
+            if (results.multiHandLandmarks.length === 2) {
+                const hand1 = results.multiHandLandmarks[0];
+                const hand2 = results.multiHandLandmarks[1];
+                const center1 = {x: (hand1[9].x + hand1[0].x) / 2, y: (hand1[9].y + hand1[0].y) / 2};
+                const center2 = {x: (hand2[9].x + hand2[0].x) / 2, y: (hand2[9].y + hand2[0].y) / 2};
+                const distance = Math.hypot(center2.x - center1.x, center2.y - center1.y);
+                
+                if (distance > 0.15 && distance < 0.35 && Math.abs(center1.y - center2.y) < 0.1) {
+                    detected = 'blue';
                 }
-            });
+            }
 
-            // Combine blue + red = purple
-            if (blueActive && redActive) {
-                detected = 'purple';
+            // Single hand or remaining hand detection
+            if (detected === 'neutral') {
+                results.multiHandLandmarks.forEach((lm) => {
+                    const isUp = (t, p) => lm[t].y < lm[p].y;
+                    const pinch = Math.hypot(lm[8].x - lm[4].x, lm[8].y - lm[4].y);
+                    const indexTip = lm[8], middleTip = lm[12];
+                    const ringTip = lm[16], pinkyTip = lm[20];
+                    const indexBase = lm[6], middleBase = lm[10];
+                    const ringBase = lm[14], pinkyBase = lm[18];
+                    
+                    const indexUp = indexTip.y < indexBase.y;
+                    const middleUp = middleTip.y < middleBase.y;
+                    const ringDown = ringTip.y > ringBase.y;
+                    const pinkyDown = pinkyTip.y > pinkyBase.y;
+                    
+                    // Base technique detection
+                    let baseTech = 'neutral';
+                    if (pinch < 0.04) baseTech = 'purple';
+                    else if (isUp(8,6) && isUp(12,10) && isUp(16,14) && isUp(20,18)) baseTech = 'shrine';
+                    else if (isUp(8,6) && isUp(12,10) && !isUp(16,14)) baseTech = 'void';
+                    else if (isUp(8,6) && !isUp(12,10)) baseTech = 'red';
+                    
+                    detected = baseTech;
+                    
+                    // Check for two-finger drag (only on purple, red, blue)
+                    if ((baseTech === 'purple' || baseTech === 'red') && indexUp && middleUp && ringDown && pinkyDown) {
+                        const fingerGap = Math.hypot(middleTip.x - indexTip.x, middleTip.y - indexTip.y);
+                        if (fingerGap < 0.08) {
+                            isDragging = true;
+                            const midX = (indexTip.x + middleTip.x) / 2;
+                            const midY = (indexTip.y + middleTip.y) / 2;
+                            dragVelocityX = (midX - dragPositionX) * 30;
+                            dragVelocityY = (midY - dragPositionY) * 30;
+                            dragPositionX = midX;
+                            dragPositionY = midY;
+                        }
+                    }
+                });
             }
-            else if (blueActive && !redActive) {
-                detected = 'blue';
-            }
-            else if (redActive && !blueActive) {
-                detected = 'red';
-            }
-            
-            // If drag gesture detected with blue, red, or purple, apply offset
-            if (hasDragGesture && (detected === 'blue' || detected === 'red' || detected === 'purple')) {
-                dragOffsetX = dragFingerX * 40 - 20; // Convert normalized coords to screen space
-                dragOffsetY = dragFingerY * 40 - 20;
-            } else {
-                dragOffsetX = 0;
-                dragOffsetY = 0;
-            }
-        } else {
-            dragOffsetX = 0;
-            dragOffsetY = 0;
-            dragMode = false;
         }
-        
-        updateState(detected, handsPresent);
+        updateState(detected);
     });
 
 
 
-    function updateState(tech, handsPresent = false) {
+    function updateState(tech) {
         if(currentTech === tech) return;
         currentTech = tech;
         const nameEl = document.getElementById('technique-name');
         shakeIntensity = tech !== 'neutral' ? 0.4 : 0;
 
-        // Only show text for neutral state when no hands present
-        if (handsPresent) {
-            nameEl.innerText = '';
+        if (isDragging && (tech === 'purple' || tech === 'red')) {
+            if(tech === 'purple') { glowColor = '#bb00ff'; nameEl.innerText = "Secret Technique: Hollow Purple [DRAGGING]"; bloomPass.strength = 4.0; }
+            else if(tech === 'red') { glowColor = '#ff3333'; nameEl.innerText = "Reverse Cursed Technique: Red [DRAGGING]"; bloomPass.strength = 2.5; }
         } else {
-            nameEl.innerText = 'Neutral State';
+            if(tech === 'shrine') { glowColor = '#ff0000'; nameEl.innerText = "Domain Expansion: Malevolent Shrine"; bloomPass.strength = 2.5; }
+            else if(tech === 'purple') { glowColor = '#bb00ff'; nameEl.innerText = "Secret Technique: Hollow Purple"; bloomPass.strength = 4.0; }
+            else if(tech === 'void') { glowColor = '#00ffff'; nameEl.innerText = "Domain Expansion: Infinite Void"; bloomPass.strength = 2.0; }
+            else if(tech === 'red') { glowColor = '#ff3333'; nameEl.innerText = "Reverse Cursed Technique: Red"; bloomPass.strength = 2.5; }
+            else if(tech === 'blue') { glowColor = '#0066ff'; nameEl.innerText = "Reverse Cursed Technique: Blue"; bloomPass.strength = 3.0; }
+            else { glowColor = '#00ffff'; nameEl.innerText = "Neutral State"; bloomPass.strength = 1.0; }
         }
-
-        // Visual effects for each state (no text)
-        if(tech === 'shrine') { glowColor = '#ff0000'; bloomPass.strength = 2.5; }
-        else if(tech === 'purple') { glowColor = '#bb00ff'; bloomPass.strength = 4.0; }
-        else if(tech === 'void') { glowColor = '#00ffff'; bloomPass.strength = 2.0; }
-        else if(tech === 'red') { glowColor = '#ff3333'; bloomPass.strength = 2.5; }
-        else if(tech === 'blue') { glowColor = '#0066ff'; bloomPass.strength = 3.0; }
-        else if(tech === 'pinch') { glowColor = '#ff00ff'; bloomPass.strength = 2.0; }
-        else { glowColor = '#00ffff'; bloomPass.strength = 1.0; }
 
         for(let i=0; i<COUNT; i++) {
             let p;
@@ -368,23 +328,11 @@
         const col = particles.geometry.attributes.color.array;
         const siz = particles.geometry.attributes.size.array;
 
-        for(let i=0; i<COUNT; i++) {
-            // Smooth transition to target positions
-            pos[i*3] += (targetPositions[i*3] - pos[i*3]) * 0.1;
-            pos[i*3+1] += (targetPositions[i*3+1] - pos[i*3+1]) * 0.1;
-            pos[i*3+2] += (targetPositions[i*3+2] - pos[i*3+2]) * 0.1;
-            
-            // Apply drag offset when in drag mode
-            if (dragMode && (currentTech === 'blue' || currentTech === 'red' || currentTech === 'purple')) {
-                pos[i*3] += dragOffsetX * 0.01; // Scale down for subtle effect
-                pos[i*3+1] += dragOffsetY * 0.01;
-            }
-            
-            col[i*3] += (targetColors[i*3] - col[i*3]) * 0.1;
-            col[i*3+1] += (targetColors[i*3+1] - col[i*3+1]) * 0.1;
-            col[i*3+2] += (targetColors[i*3+2] - col[i*3+2]) * 0.1;
-            siz[i] += (targetSizes[i] - siz[i]) * 0.1;
+        for(let i=0; i<COUNT*3; i++) {
+            pos[i] += (targetPositions[i] - pos[i]) * 0.1;
+            col[i] += (targetColors[i] - col[i]) * 0.1;
         }
+        for(let i=0; i<COUNT; i++) siz[i] += (targetSizes[i] - siz[i]) * 0.1;
 
         particles.geometry.attributes.position.needsUpdate = true;
         particles.geometry.attributes.color.needsUpdate = true;
@@ -405,6 +353,15 @@
         } else {
             // Default Neutral rotation
             particles.rotation.y += 0.005;
+        }
+        
+        // Apply drag velocity smoothing
+        if (isDragging) {
+            dragVelocityX *= 0.95;
+            dragVelocityY *= 0.95;
+            if (Math.abs(dragVelocityX) < 0.1 && Math.abs(dragVelocityY) < 0.1) {
+                isDragging = false;
+            }
         }
 
         composer.render();
