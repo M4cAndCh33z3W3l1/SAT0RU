@@ -115,8 +115,6 @@
     const targetPositions = new Float32Array(COUNT * 3);
     const targetColors = new Float32Array(COUNT * 3);
     const targetSizes = new Float32Array(COUNT);
-    
-    const velocities = new Float32Array(COUNT * 3); // For explosion/suction effects
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -158,11 +156,16 @@
     }
 
     function getBlue(i) {
-        // All particles suck towards center, creating a medium-sized ball
-        const angle = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-        const radius = 3 + Math.random() * 4; // Medium ball size
-        return { x: radius * Math.sin(phi) * Math.cos(angle), y: radius * Math.sin(phi) * Math.sin(angle), z: radius * Math.cos(phi), r: 0.1, g: 0.3, b: 1.0, s: 2.2 };
+        if(i < COUNT * 0.15) {
+            const r = Math.random() * 12;
+            const theta = Math.random() * 6.28; const phi = Math.acos(2 * Math.random() - 1);
+            return { x: r * Math.sin(phi) * Math.cos(theta), y: r * Math.sin(phi) * Math.sin(theta), z: r * Math.cos(phi), r: 0.1, g: 0.3, b: 1.0, s: 2.8 };
+        } else {
+            const armCount = 3; const t = (i / COUNT); 
+            const angle = t * 15 + ((i % armCount) * (Math.PI * 2 / armCount));
+            const radius = 2 + (t * 40); 
+            return { x: radius * Math.cos(angle), y: radius * Math.sin(angle), z: (Math.random() - 0.5) * (10 * t), r: 0.1, g: 0.2, b: 0.9, s: 1.2 };
+        }
     }
 
     function getShrine(i) {
@@ -181,9 +184,11 @@
     // Hand Tracking
     let currentTech = 'neutral';
     let shakeIntensity = 0;
-    let wasBlue = false; // Track if blue just ended
-    let isExploding = false; // Track explosion state
-    let explosionTimer = 0;
+    let dragMode = false;
+    let dragFingerX = 0;
+    let dragFingerY = 0;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
     const videoElement = document.querySelector('.input_video');
     const canvasElement = document.getElementById('output_canvas');
     const canvasCtx = canvasElement.getContext('2d');
@@ -208,6 +213,15 @@
         const thumbUp = isUp(4, 3);
         const palmUp = lm[9].y > lm[0].y; // Palm center below wrist
         
+        // Check for two-finger pointing (index and middle up, ring and pinky down)
+        const twoFingersUp = isUp(8,6) && isUp(12,10) && !isUp(16,14) && !isUp(20,18);
+        if (twoFingersUp) {
+            dragFingerX = (indexTip.x + middleTip.x) / 2;
+            dragFingerY = (indexTip.y + middleTip.y) / 2;
+            dragMode = true;
+            return 'drag';
+        }
+        
         if (allFingersCurled && thumbUp && palmUp) {
             return 'blue'; // Bowl shape = Blue
         }
@@ -224,6 +238,7 @@
             return 'pinch'; // Pinch detected
         }
         
+        dragMode = false;
         return 'neutral';
     }
 
@@ -233,6 +248,7 @@
         let blueActive = false;
         let redActive = false;
         let handsPresent = false;
+        let hasDragGesture = false;
 
         if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
             handsPresent = true;
@@ -245,9 +261,13 @@
             // Detect gestures on each hand independently
             results.multiHandLandmarks.forEach((lm) => {
                 const gesture = detectHandGesture(lm);
-                if (gesture === 'blue') blueActive = true;
-                if (gesture === 'red') redActive = true;
-                if (gesture !== 'neutral' && gesture !== 'blue' && gesture !== 'red') {
+                if (gesture === 'drag') {
+                    hasDragGesture = true;
+                } else if (gesture === 'blue') {
+                    blueActive = true;
+                } else if (gesture === 'red') {
+                    redActive = true;
+                } else if (gesture !== 'neutral' && gesture !== 'blue' && gesture !== 'red') {
                     detected = gesture; // Priority: shrine, void, pinch
                 }
             });
@@ -262,6 +282,19 @@
             else if (redActive && !blueActive) {
                 detected = 'red';
             }
+            
+            // If drag gesture detected with blue, red, or purple, apply offset
+            if (hasDragGesture && (detected === 'blue' || detected === 'red' || detected === 'purple')) {
+                dragOffsetX = dragFingerX * 40 - 20; // Convert normalized coords to screen space
+                dragOffsetY = dragFingerY * 40 - 20;
+            } else {
+                dragOffsetX = 0;
+                dragOffsetY = 0;
+            }
+        } else {
+            dragOffsetX = 0;
+            dragOffsetY = 0;
+            dragMode = false;
         }
         
         updateState(detected, handsPresent);
@@ -271,23 +304,6 @@
 
     function updateState(tech, handsPresent = false) {
         if(currentTech === tech) return;
-        
-        // Detect transition from blue to neutral - trigger explosion
-        if (wasBlue && tech !== 'blue') {
-            isExploding = true;
-            explosionTimer = 0;
-            // Apply explosion velocities to all particles
-            for (let i = 0; i < COUNT; i++) {
-                const angle = Math.random() * Math.PI * 2;
-                const phi = Math.acos(2 * Math.random() - 1);
-                const speed = 0.5 + Math.random() * 1.0;
-                velocities[i*3] = speed * Math.sin(phi) * Math.cos(angle);
-                velocities[i*3+1] = speed * Math.sin(phi) * Math.sin(angle);
-                velocities[i*3+2] = speed * Math.cos(phi);
-            }
-        }
-        
-        wasBlue = (tech === 'blue');
         currentTech = tech;
         const nameEl = document.getElementById('technique-name');
         shakeIntensity = tech !== 'neutral' ? 0.4 : 0;
@@ -352,36 +368,16 @@
         const col = particles.geometry.attributes.color.array;
         const siz = particles.geometry.attributes.size.array;
 
-        // Apply suction/explosion physics
         for(let i=0; i<COUNT; i++) {
-            if (currentTech === 'blue') {
-                // Suction: Pull towards center slowly
-                pos[i*3] += (targetPositions[i*3] - pos[i*3]) * 0.15;
-                pos[i*3+1] += (targetPositions[i*3+1] - pos[i*3+1]) * 0.15;
-                pos[i*3+2] += (targetPositions[i*3+2] - pos[i*3+2]) * 0.15;
-                velocities[i*3] *= 0.95; // Dampen velocities
-                velocities[i*3+1] *= 0.95;
-                velocities[i*3+2] *= 0.95;
-            } else if (isExploding) {
-                // Explosion: Apply velocity and dampen over time
-                pos[i*3] += velocities[i*3];
-                pos[i*3+1] += velocities[i*3+1];
-                pos[i*3+2] += velocities[i*3+2];
-                velocities[i*3] *= 0.98; // Gradual dampen
-                velocities[i*3+1] *= 0.98;
-                velocities[i*3+2] *= 0.98;
-                explosionTimer++;
-                if (explosionTimer > 30) {
-                    isExploding = false;
-                }
-            } else {
-                // Normal state: smooth transition to target
-                pos[i*3] += (targetPositions[i*3] - pos[i*3]) * 0.1;
-                pos[i*3+1] += (targetPositions[i*3+1] - pos[i*3+1]) * 0.1;
-                pos[i*3+2] += (targetPositions[i*3+2] - pos[i*3+2]) * 0.1;
-                velocities[i*3] = 0;
-                velocities[i*3+1] = 0;
-                velocities[i*3+2] = 0;
+            // Smooth transition to target positions
+            pos[i*3] += (targetPositions[i*3] - pos[i*3]) * 0.1;
+            pos[i*3+1] += (targetPositions[i*3+1] - pos[i*3+1]) * 0.1;
+            pos[i*3+2] += (targetPositions[i*3+2] - pos[i*3+2]) * 0.1;
+            
+            // Apply drag offset when in drag mode
+            if (dragMode && (currentTech === 'blue' || currentTech === 'red' || currentTech === 'purple')) {
+                pos[i*3] += dragOffsetX * 0.01; // Scale down for subtle effect
+                pos[i*3+1] += dragOffsetY * 0.01;
             }
             
             col[i*3] += (targetColors[i*3] - col[i*3]) * 0.1;
