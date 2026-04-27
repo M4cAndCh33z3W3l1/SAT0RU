@@ -168,24 +168,6 @@
         }
     }
 
-    function getDivineDogs(i) {
-        if (i < COUNT * 0.3) {
-            const side = i % 2;
-            const radius = 10 + Math.random() * 15;
-            const theta = Math.random() * Math.PI * 2;
-            const phi = Math.acos(2 * Math.random() - 1);
-            const color = side === 0 ? {r: 0.1, g: 0.1, b: 0.1} : {r: 0.9, g: 0.9, b: 0.9};
-            return { x: radius * Math.sin(phi) * Math.cos(theta) + (side === 0 ? -15 : 15), y: radius * Math.sin(phi) * Math.sin(theta), z: radius * Math.cos(phi), r: color.r, g: color.g, b: color.b, s: 2.2 };
-        } else if (i < COUNT * 0.5) {
-            const liquid = Math.random();
-            const t = Math.random() * Math.PI * 2;
-            const side = i % 2;
-            return { x: 25 * Math.sin(t) + (side === 0 ? -12 : 12), y: -8 + Math.random() * 8, z: 25 * Math.cos(t) * 0.4, r: 0.3 * liquid, g: 0.3 * liquid, b: 0.3 * liquid, s: 1.8 };
-        } else {
-            return { x: (Math.random()-0.5)*80, y: -12, z: (Math.random()-0.5)*60, r: 0.05, g: 0.05, b: 0.05, s: 0.5 };
-        }
-    }
-
     function getShrine(i) {
         const total = COUNT;
         if (i < total * 0.3) return { x: (Math.random()-0.5)*80, y: -15, z: (Math.random()-0.5)*80, r: 0.4, g: 0, b: 0, s: 0.8 };
@@ -202,8 +184,11 @@
     // Hand Tracking
     let currentTech = 'neutral';
     let shakeIntensity = 0;
-    let draggingObject = null;
-    let dragOffset = new THREE.Vector3();
+    let isDragging = false;
+    let dragPositionX = 0;
+    let dragPositionY = 0;
+    let dragVelocityX = 0;
+    let dragVelocityY = 0;
     const videoElement = document.querySelector('.input_video');
     const canvasElement = document.getElementById('output_canvas');
     const canvasCtx = canvasElement.getContext('2d');
@@ -234,12 +219,6 @@
                 if (distance > 0.15 && distance < 0.35 && Math.abs(center1.y - center2.y) < 0.1) {
                     detected = 'blue';
                 }
-                
-                // Check Divine Dogs Technique (requires specific both-hand position)
-                if (detected === 'neutral') {
-                    const divineDogs = detectDivineDogs(hand1, hand2) || detectDivineDogs(hand2, hand1);
-                    if (divineDogs) detected = 'divine_dogs';
-                }
             }
 
             // Single hand or remaining hand detection
@@ -257,42 +236,35 @@
                     const ringDown = ringTip.y > ringBase.y;
                     const pinkyDown = pinkyTip.y > pinkyBase.y;
                     
-                    // Two-finger drag gesture
-                    if (indexUp && middleUp && ringDown && pinkyDown) {
-                        detected = 'drag_pointer';
+                    // Base technique detection
+                    let baseTech = 'neutral';
+                    if (pinch < 0.04) baseTech = 'purple';
+                    else if (isUp(8,6) && isUp(12,10) && isUp(16,14) && isUp(20,18)) baseTech = 'shrine';
+                    else if (isUp(8,6) && isUp(12,10) && !isUp(16,14)) baseTech = 'void';
+                    else if (isUp(8,6) && !isUp(12,10)) baseTech = 'red';
+                    
+                    detected = baseTech;
+                    
+                    // Check for two-finger drag (only on purple, red, blue)
+                    if ((baseTech === 'purple' || baseTech === 'red') && indexUp && middleUp && ringDown && pinkyDown) {
+                        const fingerGap = Math.hypot(middleTip.x - indexTip.x, middleTip.y - indexTip.y);
+                        if (fingerGap < 0.08) {
+                            isDragging = true;
+                            const midX = (indexTip.x + middleTip.x) / 2;
+                            const midY = (indexTip.y + middleTip.y) / 2;
+                            dragVelocityX = (midX - dragPositionX) * 30;
+                            dragVelocityY = (midY - dragPositionY) * 30;
+                            dragPositionX = midX;
+                            dragPositionY = midY;
+                        }
                     }
-                    else if (pinch < 0.04) detected = 'purple';
-                    else if (isUp(8,6) && isUp(12,10) && isUp(16,14) && isUp(20,18)) detected = 'shrine';
-                    else if (isUp(8,6) && isUp(12,10) && !isUp(16,14)) detected = 'void';
-                    else if (isUp(8,6) && !isUp(12,10)) detected = 'red';
                 });
             }
         }
         updateState(detected);
     });
 
-    function detectDivineDogs(leftHand, rightHand) {
-        // Left hand: 🖖 sign (fingers spread, thumb and all fingers up, gap between thumb and index)
-        const leftIsUp = (t, p) => leftHand[t].y < leftHand[p].y;
-        const thumbSpread = Math.hypot(leftHand[4].x - leftHand[9].x, leftHand[4].y - leftHand[9].y) > 0.15;
-        const fingersUp = leftIsUp(8,6) && leftIsUp(12,10) && leftIsUp(16,14) && leftIsUp(20,18);
-        const thumbUp = leftIsUp(4, 3);
-        
-        // Right hand: cup shape (thumb up, other fingers curled)
-        const rightIsUp = (t, p) => rightHand[t].y < rightHand[p].y;
-        const rightThumbUp = rightIsUp(4, 3);
-        const rightFingersDown = !rightIsUp(8,6) && !rightIsUp(12,10) && !rightIsUp(16,14) && !rightIsUp(20,18);
-        
-        // Check gap between hands (cupping motion)
-        const leftPalmCenter = {x: leftHand[9].x, y: leftHand[9].y};
-        const rightPalmCenter = {x: rightHand[9].x, y: rightHand[9].y};
-        const handDistance = Math.hypot(rightPalmCenter.x - leftPalmCenter.x, rightPalmCenter.y - leftPalmCenter.y);
-        
-        if (thumbSpread && fingersUp && thumbUp && rightThumbUp && rightFingersDown && handDistance > 0.1 && handDistance < 0.4) {
-            return true;
-        }
-        return false;
-    }
+
 
     function updateState(tech) {
         if(currentTech === tech) return;
@@ -300,14 +272,17 @@
         const nameEl = document.getElementById('technique-name');
         shakeIntensity = tech !== 'neutral' ? 0.4 : 0;
 
-        if(tech === 'shrine') { glowColor = '#ff0000'; nameEl.innerText = "Domain Expansion: Malevolent Shrine"; bloomPass.strength = 2.5; }
-        else if(tech === 'purple') { glowColor = '#bb00ff'; nameEl.innerText = "Secret Technique: Hollow Purple"; bloomPass.strength = 4.0; }
-        else if(tech === 'void') { glowColor = '#00ffff'; nameEl.innerText = "Domain Expansion: Infinite Void"; bloomPass.strength = 2.0; }
-        else if(tech === 'red') { glowColor = '#ff3333'; nameEl.innerText = "Reverse Cursed Technique: Red"; bloomPass.strength = 2.5; }
-        else if(tech === 'blue') { glowColor = '#0066ff'; nameEl.innerText = "Reverse Cursed Technique: Blue"; bloomPass.strength = 3.0; }
-        else if(tech === 'divine_dogs') { glowColor = '#4a4a4a'; nameEl.innerText = "Ten Shadows Technique: Divine Dogs"; bloomPass.strength = 2.8; }
-        else if(tech === 'drag_pointer') { glowColor = '#00ff99'; nameEl.innerText = "Two-Finger Manipulation"; bloomPass.strength = 1.5; }
-        else { glowColor = '#00ffff'; nameEl.innerText = "Neutral State"; bloomPass.strength = 1.0; }
+        if (isDragging && (tech === 'purple' || tech === 'red')) {
+            if(tech === 'purple') { glowColor = '#bb00ff'; nameEl.innerText = "Secret Technique: Hollow Purple [DRAGGING]"; bloomPass.strength = 4.0; }
+            else if(tech === 'red') { glowColor = '#ff3333'; nameEl.innerText = "Reverse Cursed Technique: Red [DRAGGING]"; bloomPass.strength = 2.5; }
+        } else {
+            if(tech === 'shrine') { glowColor = '#ff0000'; nameEl.innerText = "Domain Expansion: Malevolent Shrine"; bloomPass.strength = 2.5; }
+            else if(tech === 'purple') { glowColor = '#bb00ff'; nameEl.innerText = "Secret Technique: Hollow Purple"; bloomPass.strength = 4.0; }
+            else if(tech === 'void') { glowColor = '#00ffff'; nameEl.innerText = "Domain Expansion: Infinite Void"; bloomPass.strength = 2.0; }
+            else if(tech === 'red') { glowColor = '#ff3333'; nameEl.innerText = "Reverse Cursed Technique: Red"; bloomPass.strength = 2.5; }
+            else if(tech === 'blue') { glowColor = '#0066ff'; nameEl.innerText = "Reverse Cursed Technique: Blue"; bloomPass.strength = 3.0; }
+            else { glowColor = '#00ffff'; nameEl.innerText = "Neutral State"; bloomPass.strength = 1.0; }
+        }
 
         for(let i=0; i<COUNT; i++) {
             let p;
@@ -321,14 +296,7 @@
             else if(tech === 'void') p = getVoid(i);
             else if(tech === 'purple') p = getPurple(i);
             else if(tech === 'blue') p = getBlue(i);
-            else if(tech === 'divine_dogs') p = getDivineDogs(i);
             else if(tech === 'shrine') p = getShrine(i);
-            else if(tech === 'drag_pointer') {
-                if(i < COUNT * 0.1) {
-                    const r = 5 + Math.random()*8; const t = Math.random()*6.28; const ph = Math.acos(2*Math.random()-1);
-                    p = { x: r*Math.sin(ph)*Math.cos(t), y: r*Math.sin(ph)*Math.sin(t), z: r*Math.cos(ph), r: 0.0, g: 1.0, b: 0.6, s: 1.5 };
-                } else p = { x:0, y:0, z:0, r:0, g:0, b:0, s:0 };
-            }
             else p = { x:0, y:0, z:0, r:0, g:0, b:0, s:0 };
             
             targetPositions[i*3] = p.x; targetPositions[i*3+1] = p.y; targetPositions[i*3+2] = p.z;
@@ -382,14 +350,18 @@
         } else if (currentTech === 'blue') {
             particles.rotation.x += 0.08;
             particles.rotation.y -= 0.06;
-        } else if (currentTech === 'divine_dogs') {
-            particles.rotation.z += 0.1;
-            particles.rotation.y += 0.08;
-        } else if (currentTech === 'drag_pointer') {
-            particles.rotation.y += 0.03;
         } else {
             // Default Neutral rotation
             particles.rotation.y += 0.005;
+        }
+        
+        // Apply drag velocity smoothing
+        if (isDragging) {
+            dragVelocityX *= 0.95;
+            dragVelocityY *= 0.95;
+            if (Math.abs(dragVelocityX) < 0.1 && Math.abs(dragVelocityY) < 0.1) {
+                isDragging = false;
+            }
         }
 
         composer.render();
