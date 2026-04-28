@@ -134,42 +134,31 @@
     const particles = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 0.3, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
     scene.add(particles);
 
-    // --- Colored Orb Meshes ---
+    // --- Main Draggable Orb ---
     const orbGroup = new THREE.Group();
     scene.add(orbGroup);
     
-    const orbs = {
-        blue: [],
-        red: [],
-        purple: []
-    };
+    let mainOrb = null;
+    const mainTarget = new THREE.Vector3(0, -100, 0);
     
-    const fingerTargets = {
-        blue: new THREE.Vector3(0, -100, 0),
-        red: new THREE.Vector3(0, -100, 0),
-        purple: new THREE.Vector3(0, -100, 0)
-    };
-    
-    // Create orb meshes
-    const createOrb = (color) => {
-        const geometry = new THREE.IcosahedronGeometry(2.5, 4);
+    const createMainOrb = () => {
+        const geometry = new THREE.IcosahedronGeometry(5, 5);
         const material = new THREE.MeshStandardMaterial({ 
-            color: color, 
-            emissive: color,
-            emissiveIntensity: 2,
-            wireframe: true,
+            color: 0x00ffff,
+            emissive: 0x00ffff,
+            emissiveIntensity: 2.5,
             transparent: true,
-            opacity: 0.9
+            opacity: 0.95,
+            roughness: 0.2,
+            metalness: 0.3
         });
         const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(0, -100, 0);
         orbGroup.add(mesh);
-        return { mesh, targetPosition: new THREE.Vector3(0, -100, 0) };
+        return { mesh, targetPosition: mainTarget };
     };
     
-    // Initialize orbs (one orb per color)
-    orbs.blue.push(createOrb(0x0088ff));
-    orbs.red.push(createOrb(0xff3333));
-    orbs.purple.push(createOrb(0xbb00ff));
+    mainOrb = createMainOrb();
 
     // Technique Functions 
     function getRed(i) {
@@ -279,9 +268,7 @@ const convertTipToWorld = (tip) => new THREE.Vector3(
         canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
         let detected = 'neutral';
 
-        fingerTargets.blue.set(0, -100, 0);
-        fingerTargets.red.set(0, -100, 0);
-        fingerTargets.purple.set(0, -100, 0);
+        mainTarget.set(0, -100, 0);
 
         if (results.multiHandLandmarks) {
             // Draw all hands first
@@ -290,12 +277,10 @@ const convertTipToWorld = (tip) => new THREE.Vector3(
                 drawLandmarks(canvasCtx, lm, {color: '#fff', lineWidth: 1, radius: 2});
             });
 
-            // Track fingertip positions directly
+            // Track the index fingertip position for dragging
             const lm = results.multiHandLandmarks[0];
             if (lm) {
-                fingerTargets.blue.copy(convertTipToWorld(lm[8]));
-                fingerTargets.red.copy(convertTipToWorld(lm[12]));
-                fingerTargets.purple.copy(convertTipToWorld(lm[16]));
+                mainTarget.copy(convertTipToWorld(lm[8]));
             }
 
             // Two hands detected → Malevolent Shrine
@@ -438,20 +423,11 @@ const convertTipToWorld = (tip) => new THREE.Vector3(
             }
         }
 
-        // Update orb positions based on fingertip targets
-        const updateFingerOrbs = (orbArray, target) => {
-            orbArray.forEach((orb) => {
-                orb.targetPosition.copy(target);
-                orb.mesh.position.lerp(orb.targetPosition, 0.15);
-                orb.mesh.rotation.x += 0.02;
-                orb.mesh.rotation.y += 0.03;
-                orb.mesh.material.emissiveIntensity = 2 + Math.sin(Date.now() * 0.01) * 0.5;
-            });
-        };
-        
-        updateFingerOrbs(orbs.blue, fingerTargets.blue);
-        updateFingerOrbs(orbs.red, fingerTargets.red);
-        updateFingerOrbs(orbs.purple, fingerTargets.purple);
+        // Update main orb position based on the fingertip target
+        mainOrb.mesh.position.lerp(mainTarget, 0.15);
+        mainOrb.mesh.rotation.x += 0.02;
+        mainOrb.mesh.rotation.y += 0.03;
+        mainOrb.mesh.material.emissiveIntensity = 2.5 + Math.sin(Date.now() * 0.01) * 0.4;
 
         const pos = particles.geometry.attributes.position.array;
         const col = particles.geometry.attributes.color.array;
