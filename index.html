@@ -32,6 +32,13 @@
             text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
         }
 
+        #color-tracking-info {
+            font-size: 0.9rem; color: #88ff88; margin-top: 20px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 8px rgba(136, 255, 136, 0.3);
+            opacity: 0.9;
+        }
+
         /* Large Centered Camera Hub - Taller for Reel Context */
         #video-container {
             position: absolute;
@@ -78,6 +85,7 @@
     <div id="ui">
         <h1>呪術廻戦</h1>
         <div id="technique-name">CURSED ENERGY</div>
+        <div id="color-tracking-info">Mark your fingertips with BLUE • RED • PURPLE to track and move orbs</div>
     </div>
 
     <div id="video-container">
@@ -106,6 +114,14 @@
     const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
     composer.addPass(bloomPass);
 
+    // Add lighting for orbs
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    
+    const pointLight = new THREE.PointLight(0xffffff, 1, 200);
+    pointLight.position.set(40, 40, 40);
+    scene.add(pointLight);
+
     const COUNT = 20000;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(COUNT * 3);
@@ -122,6 +138,39 @@
 
     const particles = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 0.3, vertexColors: true, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
     scene.add(particles);
+
+    // --- Colored Orb Meshes ---
+    const orbGroup = new THREE.Group();
+    scene.add(orbGroup);
+    
+    const orbs = {
+        blue: [],
+        red: [],
+        purple: []
+    };
+    
+    // Create orb meshes
+    const createOrb = (color) => {
+        const geometry = new THREE.IcosahedronGeometry(2, 4);
+        const material = new THREE.MeshStandardMaterial({ 
+            color: color, 
+            emissive: color,
+            emissiveIntensity: 2,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.8
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        orbGroup.add(mesh);
+        return { mesh, targetPosition: new THREE.Vector3(0, 0, 0) };
+    };
+    
+    // Initialize orbs
+    for (let i = 0; i < 5; i++) {
+        orbs.blue.push(createOrb(0x0088ff));
+        orbs.red.push(createOrb(0xff3333));
+        orbs.purple.push(createOrb(0xbb00ff));
+    }
 
     // Technique Functions 
     function getRed(i) {
@@ -218,6 +267,96 @@
     const canvasCtx = canvasElement.getContext('2d');
     let glowColor = '#00ffff';
 
+    // Color tracking for orbs
+    let coloredOrbPositions = { blue: [], red: [], purple: [] };
+    
+    function detectColoredFingers(imageData) {
+        const data = imageData.data;
+        const width = imageData.width;
+        const height = imageData.height;
+        
+        const bluePixels = [];
+        const redPixels = [];
+        const purplePixels = [];
+        
+        // Scan for colored pixels
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const a = data[i + 3];
+            
+            if (a < 100) continue; // Skip transparent pixels
+            
+            // Detect BLUE (high blue, low red, low green)
+            if (b > 150 && r < 100 && g < 100) {
+                bluePixels.push(i / 4);
+            }
+            // Detect RED (high red, low green, low blue)
+            else if (r > 150 && g < 100 && b < 100) {
+                redPixels.push(i / 4);
+            }
+            // Detect PURPLE (high red and blue, low green)
+            else if (r > 120 && b > 120 && g < 100) {
+                purplePixels.push(i / 4);
+            }
+        }
+        
+        // Calculate cluster centers for each color
+        coloredOrbPositions.blue = clusteredPositions(bluePixels, width, height);
+        coloredOrbPositions.red = clusteredPositions(redPixels, width, height);
+        coloredOrbPositions.purple = clusteredPositions(purplePixels, width, height);
+    }
+    
+    function clusteredPositions(pixels, width, height) {
+        if (pixels.length === 0) return [];
+        
+        // Fast clustering using spatial proximity
+        const pixelSet = new Set(pixels);
+        const clusters = [];
+        const visited = new Set();
+        
+        for (const pixel of pixels) {
+            if (visited.has(pixel)) continue;
+            
+            // BFS to find connected cluster
+            const cluster = [];
+            const queue = [pixel];
+            visited.add(pixel);
+            
+            while (queue.length > 0 && cluster.length < 500) {
+                const px = queue.shift();
+                cluster.push(px);
+                
+                // Check neighbors (4-connected)
+                const neighbors = [px - 1, px + 1, px - width, px + width];
+                for (const nPx of neighbors) {
+                    if (pixelSet.has(nPx) && !visited.has(nPx)) {
+                        visited.add(nPx);
+                        queue.push(nPx);
+                    }
+                }
+            }
+            
+            if (cluster.length > 20) { // Minimum cluster size
+                clusters.push(cluster);
+            }
+        }
+        
+        // Calculate center of each cluster
+        return clusters.map(cluster => {
+            let x = 0, y = 0;
+            for (const pixel of cluster) {
+                x += pixel % width;
+                y += Math.floor(pixel / width);
+            }
+            return {
+                x: (x / cluster.length) / width,
+                y: (y / cluster.length) / height
+            };
+        });
+    }
+
     const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
     hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7 });
 
@@ -231,6 +370,14 @@
                 drawConnectors(canvasCtx, lm, HAND_CONNECTIONS, {color: glowColor, lineWidth: 5});
                 drawLandmarks(canvasCtx, lm, {color: '#fff', lineWidth: 1, radius: 2});
             });
+
+            // Detect colored fingers AFTER drawing, so we can get the pixel data
+            try {
+                const imageData = canvasCtx.getImageData(0, 0, canvasElement.width, canvasElement.height);
+                detectColoredFingers(imageData);
+            } catch (e) {
+                // Cross-origin issue, skip color detection this frame
+            }
 
             // Two hands detected → Malevolent Shrine
             if (results.multiHandLandmarks.length === 2) {
@@ -371,6 +518,37 @@
                 updateState('neutral');
             }
         }
+
+        // Update orb positions based on detected colors
+        const updateOrbPositions = (orbArray, colorPositions, baseColor) => {
+            orbArray.forEach((orb, idx) => {
+                if (idx < colorPositions.length) {
+                    const pos = colorPositions[idx];
+                    // Convert from video space (0-1) to world space
+                    const worldX = (pos.x - 0.5) * 50;
+                    const worldY = (0.5 - pos.y) * 30;
+                    const worldZ = 20 + Math.random() * 10;
+                    
+                    orb.targetPosition.set(worldX, worldY, worldZ);
+                } else {
+                    // Hide if no finger detected
+                    orb.targetPosition.set(0, -100, 0);
+                }
+                
+                // Smooth animation
+                orb.mesh.position.lerp(orb.targetPosition, 0.15);
+                orb.mesh.rotation.x += 0.02;
+                orb.mesh.rotation.y += 0.03;
+                
+                // Glow based on orb activity
+                const distance = orb.mesh.position.distanceTo(orb.targetPosition);
+                orb.mesh.material.emissiveIntensity = 2 + Math.sin(Date.now() * 0.01) * 0.5;
+            });
+        };
+        
+        updateOrbPositions(orbs.blue, coloredOrbPositions.blue, 0x0088ff);
+        updateOrbPositions(orbs.red, coloredOrbPositions.red, 0xff3333);
+        updateOrbPositions(orbs.purple, coloredOrbPositions.purple, 0xbb00ff);
 
         const pos = particles.geometry.attributes.position.array;
         const col = particles.geometry.attributes.color.array;
